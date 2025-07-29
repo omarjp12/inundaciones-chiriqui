@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard de Inundaciones - Chiriquí</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #f4f4f9; }
+    .header {
+      background: #0078A8;
+      color: white;
+      padding: 12px;
+      text-align: center;
+      font-size: 22px;
+      font-weight: bold;
+    }
+    #map { height: 50vh; width: 100%; }
+    .icon-lluvia, .icon-alerta {
+      background-size: cover;
+      width: 48px;
+      height: 48px;
+    }
+    .icon-lluvia {
+      background-image: url('https://img.icons8.com/color/96/000000/rain.png');
+    }
+    .icon-alerta {
+      background-image: url('https://img.icons8.com/emoji/96/000000/warning-emoji.png');
+    }
+    .charts {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 20px;
+      padding: 20px;
+      background: white;
+    }
+    .chart-container {
+      width: 300px;
+      height: 200px;
+    }
+    .resumen {
+      text-align: center;
+      background: #e9f7ff;
+      padding: 10px;
+      font-size: 16px;
+    }
+    .descarga {
+      text-align: center;
+      margin-top: 10px;
+    }
+    .descarga button {
+      background: #0078A8;
+      color: white;
+      padding: 8px 16px;
+      font-size: 14px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .descarga button:hover {
+      background: #005f80;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">Dashboard de Monitoreo en Tiempo Real - Chiriquí</div>
+  <div id="map"></div>
+  <div class="resumen" id="panelResumen">Resumen general cargando...</div>
+
+  <div class="charts">
+    <div class="chart-container"><canvas id="lluviaChart"></canvas></div>
+    <div class="chart-container"><canvas id="tempChart"></canvas></div>
+    <div class="chart-container"><canvas id="humChart"></canvas></div>
+  </div>
+
+  <div class="descarga">
+    <button onclick="descargarCSV()">📥 Descargar Datos CSV</button>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.2.1"></script>
+  <script>
+    const map = L.map('map').setView([8.65, -82.55], 10);
+    L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '© Esri, USGS, NOAA',
+      maxZoom: 19
+    }).addTo(map);
+
+    const estaciones = [
+      { nombre: "Volcán", coords: [8.7717, -82.6274] },
+      { nombre: "Cerro Punta", coords: [8.8477, -82.5666] },
+      { nombre: "Boquete", coords: [8.7800, -82.4414] },
+      { nombre: "David", coords: [8.4333, -82.4333] },
+      { nombre: "Renacimiento", coords: [8.5650, -82.8425] }
+    ];
+
+    const pronostico = {
+      "Volcán": 35,
+      "Cerro Punta": 40,
+      "Boquete": 20,
+      "David": 15,
+      "Renacimiento": 50
+    };
+
+    let markers = [];
+    let historial = [];
+
+    function generarDato(nombreEstacion) {
+      const lluviaForecast = pronostico[nombreEstacion];
+      const lluviaReal = Math.max(0, Math.round(lluviaForecast + (Math.random() * 10 - 5)));
+      return {
+        lluvia: lluviaReal,
+        temp: (23 + Math.random() * 10).toFixed(1),
+        hum: (60 + Math.random() * 40).toFixed(1),
+        hora: new Date().toLocaleTimeString()
+      };
+    }
+
+    function getColorFondo(lluvia) {
+      if (lluvia <= 30) return '#e8f5e9'; // verde
+      if (lluvia <= 40) return '#fff8e1'; // amarillo
+      return '#ffebee'; // rojo
+    }
+
+    function actualizarEstaciones() {
+      markers.forEach(m => map.removeLayer(m));
+      markers = [];
+
+      const datos = [];
+
+      estaciones.forEach(est => {
+        const data = generarDato(est.nombre);
+        const forecast = pronostico[est.nombre];
+        const fondo = getColorFondo(data.lluvia);
+        const icono = L.divIcon({
+          className: data.lluvia > 40 ? 'icon-alerta' : 'icon-lluvia'
+        });
+
+        const popup = `
+          <div style="background-color:${fondo}; padding:6px; border-radius:6px;">
+            <b>📍 ${est.nombre}</b><br>
+            🌧️ Pronóstico: ${forecast} mm<br>
+            🌧️ Observado: <b>${data.lluvia}</b> mm<br>
+            🌡️ Temp: ${data.temp} °C<br>
+            💧 Humedad: ${data.hum} %<br>
+            ⏱️ ${data.hora}
+          </div>`;
+
+        const marker = L.marker(est.coords, { icon: icono }).addTo(map).bindPopup(popup);
+
+        markers.push(marker);
+        datos.push({ ...est, ...data, forecast });
+        historial.push({ ...est, ...data });
+      });
+
+      actualizarGraficos(datos);
+      actualizarResumen(datos);
+    }
+
+    // === GRÁFICOS ===
+    const ctxLluvia = document.getElementById('lluviaChart').getContext('2d');
+    const ctxTemp = document.getElementById('tempChart').getContext('2d');
+    const ctxHum = document.getElementById('humChart').getContext('2d');
+
+    const lluviaChart = new Chart(ctxLluvia, {
+      type: 'bar',
+      data: {
+        labels: estaciones.map(e => e.nombre),
+        datasets: [
+          {
+            label: 'Pronóstico (mm)',
+            data: estaciones.map(e => pronostico[e.nombre]),
+            backgroundColor: 'rgba(0,123,255,0.5)'
+          },
+          {
+            label: 'Observado (mm)',
+            data: estaciones.map(() => 0),
+            backgroundColor: 'rgba(255,99,132,0.6)'
+          }
+        ]
+      },
+      options: {
+        plugins: {
+          title: { display: true, text: 'Lluvia: Pronóstico vs Observado' },
+          annotation: {
+            annotations: {
+              umbral: {
+                type: 'line',
+                yMin: 40,
+                yMax: 40,
+                borderColor: 'orange',
+                borderWidth: 2,
+                label: {
+                  content: 'Umbral 40 mm',
+                  enabled: true,
+                  position: 'end',
+                  backgroundColor: 'orange',
+                  color: 'white'
+                }
+              }
+            }
+          }
+        },
+        scales: { y: { beginAtZero: true, max: 70 } },
+        responsive: true,
+        maintainAspectRatio: false
+      },
+      plugins: [Chart.registry.getPlugin('annotation')]
+    });
+
+    const tempChart = new Chart(ctxTemp, {
+      type: 'bar',
+      data: {
+        labels: estaciones.map(e => e.nombre),
+        datasets: [{
+          label: 'Temp (°C)',
+          data: estaciones.map(() => 0),
+          backgroundColor: 'rgba(255,99,132,0.6)'
+        }]
+      },
+      options: {
+        plugins: { title: { display: true, text: 'Temperatura por Estación' } },
+        scales: { y: { beginAtZero: true, min: 20, max: 40 } },
+        responsive: true,
+        maintainAspectRatio: false
+      }
+    });
+
+    const humChart = new Chart(ctxHum, {
+      type: 'bar',
+      data: {
+        labels: estaciones.map(e => e.nombre),
+        datasets: [{
+          label: 'Humedad (%)',
+          data: estaciones.map(() => 0),
+          backgroundColor: 'rgba(75,192,192,0.6)'
+        }]
+      },
+      options: {
+        plugins: { title: { display: true, text: 'Humedad por Estación' } },
+        scales: { y: { beginAtZero: true, max: 100 } },
+        responsive: true,
+        maintainAspectRatio: false
+      }
+    });
+
+    function actualizarGraficos(datos) {
+      lluviaChart.data.datasets[1].data = datos.map(d => d.lluvia);
+      tempChart.data.datasets[0].data = datos.map(d => d.temp);
+      humChart.data.datasets[0].data = datos.map(d => d.hum);
+      lluviaChart.update();
+      tempChart.update();
+      humChart.update();
+    }
+
+    function actualizarResumen(datos) {
+      const prom = (arr, campo) =>
+        (arr.reduce((sum, d) => sum + parseFloat(d[campo]), 0) / arr.length).toFixed(1);
+      document.getElementById('panelResumen').innerText =
+        `🌧️ Lluvia promedio: ${prom(datos, 'lluvia')} mm | 🌡️ Temp: ${prom(datos, 'temp')} °C | 💧 Humedad: ${prom(datos, 'hum')} %`;
+    }
+
+    function descargarCSV() {
+      const filas = [
+        "Estación,Latitud,Longitud,Pronóstico (mm),Observado (mm),Temp (°C),Humedad (%),Hora",
+        ...historial.map(r =>
+          `${r.nombre},${r.coords[0]},${r.coords[1]},${r.forecast},${r.lluvia},${r.temp},${r.hum},${r.hora}`
+        )
+      ];
+      const blob = new Blob([filas.join("\n")], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "datos_estaciones_forecast.csv";
+      link.click();
+    }
+
+    actualizarEstaciones();
+    setInterval(actualizarEstaciones, 5000);
+  </script>
+</body>
+</html>
